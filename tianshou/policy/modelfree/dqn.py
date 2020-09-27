@@ -173,6 +173,8 @@ class DQNPolicy(BasePolicy):
         loss = (td.pow(2) * weight).mean()
         batch.weight = td  # prio-buffer
         loss.backward()
+        # Gradient clips
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1)
         self.optim.step()
         self._cnt += 1
         return {"loss": loss.item()}

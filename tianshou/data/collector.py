@@ -372,6 +372,8 @@ class Collector(object):
             "v/ep": episode_count / duration,
             "rew": reward_avg,
             "len": step_count / episode_count,
+            'q/mean': torch.mean(result.logits).item(),
+            'q/std': torch.mean(result.logits.std(dim=1)).item()
         }
 
 
