@@ -1,5 +1,6 @@
 import time
 import tqdm
+from torch.optim.lr_scheduler import StepLR
 from torch.utils.tensorboard import SummaryWriter
 from typing import Dict, List, Union, Callable, Optional
 
@@ -18,6 +19,7 @@ def offpolicy_trainer(
     collect_per_step: int,
     episode_per_test: Union[int, List[int]],
     batch_size: int,
+    lr_scheduler: Optional[StepLR] = None, 
     update_per_step: int = 1,
     train_fn: Optional[Callable[[int, int], None]] = None,
     test_fn: Optional[Callable[[int, Optional[int]], None]] = None,
@@ -128,6 +130,11 @@ def offpolicy_trainer(
                     t.set_postfix(**data)
             if t.n <= t.total:
                 t.update()
+                
+        # Learning rate decay
+        if lr_scheduler:
+            lr_scheduler.step()
+
         # test
         result = test_episode(policy, test_collector, test_fn, epoch,
                               episode_per_test, writer, global_step)

@@ -177,4 +177,9 @@ class DQNPolicy(BasePolicy):
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1)
         self.optim.step()
         self._cnt += 1
-        return {"loss": loss.item()}
+        for param_group in self.optim.param_groups:
+            lr = param_group['lr']
+        return {
+            "loss": loss.item(),
+            "lr": lr
+        }
