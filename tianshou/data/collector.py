@@ -257,7 +257,6 @@ class Collector(object):
                         result = self.policy(self.data, last_state)
                 else:
                     result = self.policy(self.data, last_state)
-
             state = result.get("state", Batch())
             # convert None to Batch(), since None is reserved for 0-init
             if state is None:
@@ -369,9 +368,7 @@ class Collector(object):
             "v/ep": episode_count / duration,
             "rew": np.mean(rewards),
             "rew_std": np.std(rewards),
-            "len": step_count / episode_count,
-            'q/mean': torch.mean(result.logits).item(),
-            'q/std': torch.mean(result.logits.std(dim=1)).item()
+            "len": step_count / episode_count
         }
 
 

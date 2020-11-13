@@ -40,6 +40,8 @@ class Net(nn.Module):
         layer_num: int,
         state_shape: tuple,
         use_cam_obs: bool = False,
+        use_phy_obs: bool = False,
+        phy_state_shape: Optional[Union[tuple, int]] = 0,
         channel: int = 4,
         height: int = 64,
         width: int = 64,
@@ -60,14 +62,23 @@ class Net(nn.Module):
             input_size += np.prod(action_shape)
 
         self.use_cam_obs = use_cam_obs
+        self.use_phy_obs = use_phy_obs
         if not self.use_cam_obs:
             model = miniblock(input_size, hidden_layer_size, norm_layer)
 
             for _ in range(layer_num):
                 model += miniblock(hidden_layer_size,
                                    hidden_layer_size, norm_layer)
+            if self.use_phy_obs:
+                phy_state_dim = np.prod(phy_state_shape)
+                model = [PhysicalNet(
+                    model, input_size, phy_state_dim, hidden_layer_size)]
         else:
-            model = [CNNBaseline(channel, height, width, input_size, hidden_layer_size // 2)]
+            # model = [CNNBaseline(channel, height, width,
+            #                      input_size, hidden_layer_size // 2,
+            #                      self.use_phy_obs, device)]
+            model = [CNN(channel, height, width, input_size,
+                         hidden_layer_size, self.use_phy_obs, device)]
         if dueling is None:
             if action_shape and not concat:
                 model += [nn.Linear(hidden_layer_size, np.prod(action_shape))]
@@ -90,7 +101,6 @@ class Net(nn.Module):
             self.V = nn.Sequential(*V)
         self.model = nn.Sequential(*model)
 
-
     def forward(
         self,
         s: Union[np.ndarray, torch.Tensor],
@@ -99,17 +109,24 @@ class Net(nn.Module):
     ) -> Tuple[torch.Tensor, Any]:
         """Mapping: s -> flatten -> logits."""
         if not self.use_cam_obs:
-            s = to_torch(s, device=self.device, dtype=torch.float32)
-            s = s.reshape(s.size(0), -1)
-            logits = self.model(s)
+            if self.use_phy_obs:
+                robot_state = to_torch(
+                    np.stack(s[:, 0]), device=self.device, dtype=torch.float32)
+                physical_state = to_torch(
+                    np.stack(s[:, 1]), device=self.device, dtype=torch.float32)
+                logits = self.model([robot_state, physical_state])
+            else:
+                s = to_torch(s, device=self.device, dtype=torch.float32)
+                s = s.reshape(s.size(0), -1)
+                logits = self.model(s)
         else:
-            img_front = to_torch(np.stack(s[:, 0]).transpose(
-                (0, 3, 1, 2)), device=self.device, dtype=torch.float32)
-            img_top = to_torch(np.stack(s[:, 1]).transpose(
+            # img_front = to_torch(np.stack(s[:, 0]).transpose(
+            #     (0, 3, 1, 2)), device=self.device, dtype=torch.float32)
+            img_top = to_torch(np.stack(s[:, 0]).transpose(
                 (0, 3, 1, 2)), device=self.device, dtype=torch.float32)
             robot_state = to_torch(
-                np.stack(s[:, 2]), device=self.device, dtype=torch.float32)
-            logits = self.model([img_front, img_top, robot_state])
+                np.stack(s[:, 1]), device=self.device, dtype=torch.float32)
+            logits = self.model([img_top, robot_state])
         if self.dueling is not None:  # Dueling DQN
             q, v = self.Q(logits), self.V(logits)
             logits = q - q.mean(dim=1, keepdim=True) + v
@@ -210,11 +227,12 @@ class FrontImgNet(nn.Module):
 
 
 class TopDownImgNet(nn.Module):
-    def __init__(self, c, h, w):
+    def __init__(self, c, h, w, hidden_size=256):
         super(TopDownImgNet, self).__init__()
 
         convh = conv2d_layers_size_out(h)
         convw = conv2d_layers_size_out(w)
+        linear_input_size = convh * convw * 64
 
         self.features = nn.Sequential(
             nn.Conv2d(c,  32, kernel_size=8, stride=4),
@@ -225,24 +243,33 @@ class TopDownImgNet(nn.Module):
 
             nn.Conv2d(64, 64, kernel_size=3, stride=1),
             nn.ReLU(),
+
+            nn.Flatten(),
+            nn.Linear(linear_input_size, hidden_size),
+            nn.ReLU()
         )
 
-        self.output_shape = (64, convh, convw)
+        self.output_shape = (hidden_size,)
 
     def forward(self, x):
-        # 4 * 64 * 64 -> 64 * 8 * 8
+        # 4 * 128 * 128 -> 64 * 12 * 12 -> 256
         return self.features(x)
 
 
 class CNNBaseline(nn.Module):
-    def __init__(self, c, h, w, state_dim, hidden_size):
+    def __init__(self, c, h, w, state_dim, hidden_size, use_phy_obs, device):
         '''Feature extractor baseline
         Note: assume the shape of first-person view depth image is the same as the shape of top-down view depth image
         '''
         super(CNNBaseline, self).__init__()
 
         self.front_img_net = FrontImgNet(c, h, w, hidden_size)
+        # if use_phy_obs:
+        #     self.top_down_img_net = TopDownImgNet(c*2, h, w)
+        # else:
+        #     self.top_down_img_net = TopDownImgNet(c, h, w)
         self.top_down_img_net = TopDownImgNet(c, h, w)
+
         self.out_c, self.out_h, self.out_w = self.top_down_img_net.output_shape
 
         self.orientation_net = nn.Sequential(
@@ -263,12 +290,14 @@ class CNNBaseline(nn.Module):
             nn.ReLU()
         )
 
+        self.hidden_size = hidden_size
         self.output_shape = (2 * hidden_size,)
+        self.device = device
 
         for module in self.modules():
             weight_init(module)
 
-    def forward(self, s):
+    def forward(self, s, use_lstm=False):
         img_front, img_top, robot_state = s
         feature_front = self.front_img_net(img_front)
         feature_top_down = self.top_down_img_net(img_top)
@@ -284,4 +313,63 @@ class CNNBaseline(nn.Module):
         feature = torch.cat((feature_front, feature_fusion), dim=1)
         feature = feature.view(feature.size(0), -1)
 
-        return feature
+        if not use_lstm:
+            return feature
+        else:
+            bz = feature.size(0)
+            input_size = feature.size(1)
+            lstm_nn = nn.LSTMCell(input_size=input_size,
+                                  hidden_size=2 * self.hidden_size).to(self.device)
+            h_0 = torch.randn(bz, 2 * self.hidden_size).to(self.device)
+            c_0 = torch.randn(bz, 2 * self.hidden_size).to(self.device)
+            h_1, c_1 = lstm_nn(feature, (h_0, c_0))
+            return h_1.reshape(bz, -1)
+
+
+class PhysicalNet(nn.Module):
+    def __init__(self, net, robot_state_dim, phy_state_dim, hidden_size):
+        super(PhysicalNet, self).__init__()
+        self.preprocess_net = nn.Sequential(*net)
+        phy_model = miniblock(phy_state_dim, hidden_size, norm_layer=None)
+        for _ in range(2):
+            phy_model += miniblock(hidden_size, hidden_size, norm_layer=None)
+        self.phy_model = nn.Sequential(*phy_model)
+
+        model = miniblock(hidden_size, hidden_size, norm_layer=None)
+        self.model = nn.Sequential(*model)
+
+    def forward(self, s):
+        robot_state, physical_state = s
+        x = self.preprocess_net(robot_state)
+        if physical_state.shape[1] == 0:
+            return x
+        else:
+            y = self.phy_model(physical_state).mean(dim=1)
+            return self.model(x + y)
+
+
+class CNN(nn.Module):
+    def __init__(self, c, h, w, state_dim, hidden_size, use_phy_obs, device):
+        super(CNN, self).__init__()
+        self.top_down_img_net = TopDownImgNet(c, h, w, hidden_size)
+        self.orientation_net = nn.Sequential(
+            nn.Linear(state_dim, hidden_size),
+            nn.ReLU()
+        )
+        self.fusion_net = nn.Sequential(
+            nn.Linear(hidden_size * 2, hidden_size),
+            nn.ReLU()
+        )
+        self.output_shape = (hidden_size,)
+        for module in self.modules():
+            weight_init(module)
+
+    def forward(self, s):
+        img_top, robot_state = s
+        feature_top_down = self.top_down_img_net(img_top)
+        feature_ori = self.orientation_net(robot_state)
+
+        feature = torch.cat((feature_top_down, feature_ori), dim=1)
+        out = self.fusion_net(feature)
+
+        return out

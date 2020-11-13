@@ -77,7 +77,6 @@ class Critic(nn.Module):
         logits = self.last(logits)
         return logits
 
-
 class ActorProb(nn.Module):
     """Simple actor network (output with a Gauss distribution) with MLP.
 

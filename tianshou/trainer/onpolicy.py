@@ -23,6 +23,7 @@ def onpolicy_trainer(
     test_fn: Optional[Callable[[int, Optional[int]], None]] = None,
     stop_fn: Optional[Callable[[float], bool]] = None,
     save_fn: Optional[Callable[[BasePolicy], None]] = None,
+    log_fn: Optional[Callable[[str], None]] = None,
     writer: Optional[SummaryWriter] = None,
     log_interval: int = 1,
     verbose: bool = True,
@@ -132,6 +133,8 @@ def onpolicy_trainer(
                     if writer and gradient_step % log_interval == 0:
                         writer.add_scalar(
                             k, stat[k].get(), global_step=gradient_step)
+                if log_fn:
+                    log_fn(result, losses, gradient_step)
                 t.update(step)
                 t.set_postfix(**data)
             if t.n <= t.total:
