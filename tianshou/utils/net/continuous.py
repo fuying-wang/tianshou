@@ -3,7 +3,7 @@ import numpy as np
 from torch import nn
 from typing import Any, Dict, Tuple, Union, Optional, Sequence
 
-from tianshou.data import to_torch, to_torch_as
+from tianshou.data import to_torch, to_torch_as, to_numpy
 
 
 SIGMA_MIN = -20
@@ -67,12 +67,18 @@ class Critic(nn.Module):
         info: Dict[str, Any] = {},
     ) -> torch.Tensor:
         """Mapping: (s, a) -> logits -> Q(s, a)."""
-        s = to_torch(s, device=self.device, dtype=torch.float32)
-        s = s.flatten(1)
         if a is not None:
-            a = to_torch_as(a, s)
-            a = a.flatten(1)
-            s = torch.cat([s, a], dim=1)
+            if s.dtype == np.object:
+                a = to_numpy(a)
+                s_0 = np.stack(s[:, 0], axis=0)
+                s_1 = np.vstack(s[:, 1])
+                s_1 = np.hstack((s_1, a))
+                s = (s_0, s_1)
+            else:
+                s = s.reshape(s.shape[0], -1)
+                a = to_numpy(a)
+                a = a.reshape(a.shape[0], -1)
+                s = np.concatenate((s, a), axis=1)
         logits, h = self.preprocess(s)
         logits = self.last(logits)
         return logits

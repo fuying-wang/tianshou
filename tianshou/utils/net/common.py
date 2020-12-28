@@ -108,24 +108,32 @@ class Net(nn.Module):
         info: Dict[str, Any] = {},
     ) -> Tuple[torch.Tensor, Any]:
         """Mapping: s -> flatten -> logits."""
+        if type(s) is tuple:
+                s_0 = s[0]
+                s_1 = s[1]
+        elif type(s) is np.ndarray:
+            if s.dtype == object:
+                s_0 = s[:, 0]
+                s_1 = s[:, 1]
+        else:
+            raise ValueError("No type %s!" % type(s))
+
         if not self.use_cam_obs:
             if self.use_phy_obs:
                 robot_state = to_torch(
-                    np.stack(s[:, 0]), device=self.device, dtype=torch.float32)
+                    np.stack(s_0), device=self.device, dtype=torch.float32)
                 physical_state = to_torch(
-                    np.stack(s[:, 1]), device=self.device, dtype=torch.float32)
+                    np.stack(s_1), device=self.device, dtype=torch.float32)
                 logits = self.model([robot_state, physical_state])
             else:
                 s = to_torch(s, device=self.device, dtype=torch.float32)
                 s = s.reshape(s.size(0), -1)
                 logits = self.model(s)
         else:
-            # img_front = to_torch(np.stack(s[:, 0]).transpose(
-            #     (0, 3, 1, 2)), device=self.device, dtype=torch.float32)
-            img_top = to_torch(np.stack(s[:, 0]).transpose(
+            img_top = to_torch(np.stack(s_0).transpose(
                 (0, 3, 1, 2)), device=self.device, dtype=torch.float32)
             robot_state = to_torch(
-                np.stack(s[:, 1]), device=self.device, dtype=torch.float32)
+                np.stack(s_1), device=self.device, dtype=torch.float32)
             logits = self.model([img_top, robot_state])
         if self.dueling is not None:  # Dueling DQN
             q, v = self.Q(logits), self.V(logits)
